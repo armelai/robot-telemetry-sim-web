@@ -511,10 +511,25 @@
     setRunning(true);
     setConn('connecting');
     const c = client;
-    c.on('connect', () => { if (client === c) setConn('connected'); });
+    let opened = false;
+    c.on('connect', () => { opened = true; if (client === c) { lastError = ''; setConn('connected'); } });
+    c.on('close', () => { if (client === c && !opened) lastError = connectFailureHint(url); });
     c.on('reconnect', () => { if (client === c) setConn('connecting', 'reconnecting'); });
     c.on('offline', () => { if (client === c) setConn('connecting', 'offline'); });
     c.on('error', e => { if (client === c) { lastError = e.message || String(e); setConn('error'); } });
+  }
+
+  // WebSocket failures carry no reason in the browser, so explain the likely causes.
+  function connectFailureHint(url) {
+    let local = false;
+    try { local = LOCAL_HOSTS.includes(new URL(url).hostname); } catch { /* invalid URL */ }
+    if (local && location.protocol === 'https:') {
+      return `Can't reach ${url}. Check that the local stack is running (docker compose up -d). ` +
+        'Browsers also block public websites from reaching localhost until you allow it: click the ' +
+        'site-settings icon left of the address bar, allow "Local network access", then reload.';
+    }
+    return `Can't reach ${url}. Check the host, port and path (HiveMQ and EMQX need /mqtt) ` +
+      'and that the broker accepts WebSocket connections.';
   }
 
   function stop() {
