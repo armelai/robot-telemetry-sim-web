@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Telemetry Simulator</title>
+<meta name="description" content="A fake fleet of warehouse robots that publishes telemetry over MQTT (WebSockets) as Influx Line Protocol.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M8 23 L16 7 L24 23 L16 19 Z' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dde2e8;
+    --text: #1b1f24;
+    --muted: #5d6773;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --warn-bg: #fff8e1;
+    --err: #cf222e;
+    --floor: #eef1f4;
+    --wall: #9aa3ad;
+    --shelf: #c5ccd4;
+    --edge: #cfd5dc;
+    --station: #7d8894;
+    --dock: #d4a72c;
+    --code-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0e1115;
+      --panel: #161a20;
+      --border: #2a3038;
+      --text: #e5e8ec;
+      --muted: #97a1ac;
+      --accent: #4c8dff;
+      --accent-text: #0b1220;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --warn-bg: #2a2212;
+      --err: #f85149;
+      --floor: #1b2027;
+      --wall: #56606b;
+      --shelf: #333b45;
+      --edge: #2b323b;
+      --station: #6d7885;
+      --dock: #c9a227;
+      --code-bg: #10141a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1115; --panel: #161a20; --border: #2a3038; --text: #e5e8ec; --muted: #97a1ac;
+    --accent: #4c8dff; --accent-text: #0b1220; --ok: #3fb950; --warn: #d29922; --warn-bg: #2a2212;
+    --err: #f85149; --floor: #1b2027; --wall: #56606b; --shelf: #333b45; --edge: #2b323b;
+    --station: #6d7885; --dock: #c9a227; --code-bg: #10141a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header, main, footer { max-width: 1280px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: center; gap: 12px; padding-top: 18px; padding-bottom: 10px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .sub { color: var(--muted); margin: 0; flex-basis: 100%; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; background: var(--panel); }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill[data-state="connected"]::before { background: var(--ok); }
+  .pill[data-state="connecting"]::before { background: var(--warn); }
+  .pill[data-state="error"]::before { background: var(--err); }
+
+  main { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); padding-bottom: 20px; }
+  @media (min-width: 980px) {
+    main { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); }
+    .controls, .payload { grid-column: 1 / -1; }
+  }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
+
+  form { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: end; }
+  .wide { grid-column: span 2; }
+  @media (max-width: 520px) { .wide { grid-column: 1 / -1; } }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  input {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input:disabled { opacity: .6; }
+  .buttons { display: flex; gap: 8px; }
+  button {
+    font: inherit; font-weight: 600; border-radius: 6px; padding: 7px 16px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); flex: 1;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .45; cursor: default; }
+  .hint { margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; font-size: 13px; background: var(--code-bg); color: var(--muted); }
+  .hint.warn { background: var(--warn-bg); color: var(--warn); }
+  .hint:empty { display: none; }
+
+  .map canvas { display: block; width: 100%; border-radius: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  .side { display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+  .stat .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .err-line { margin-top: 10px; font-size: 12px; color: var(--err); word-break: break-word; }
+  .err-line:empty { display: none; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  td .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .status { font-size: 12px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); }
+  .status.error { color: var(--err); border-color: var(--err); }
+  .status.charging { color: var(--warn); border-color: var(--warn); }
+  .status.moving { color: var(--ok); border-color: var(--ok); }
+  .bar { display: inline-block; width: 44px; height: 6px; border-radius: 3px; background: var(--edge); margin-right: 6px; vertical-align: 1px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--ok); }
+  .bar.low > span { background: var(--err); }
+
+  pre {
+    margin: 0; padding: 10px; border-radius: 6px; background: var(--code-bg); overflow-x: auto;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  footer { color: var(--muted); font-size: 12px; padding-bottom: 24px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Robot Telemetry Simulator</h1>
+  <span id="conn" class="pill" data-state="disconnected">disconnected</span>
+  <p class="sub">A fake fleet of warehouse robots. Each robot publishes its state over MQTT as Influx Line Protocol, for Telegraf → QuestDB → Grafana.</p>
+</header>
+
+<main>
+  <section class="panel controls" aria-label="Connection settings">
+    <form id="cfg" autocomplete="off">
+      <label class="wide">Broker URL (MQTT over WebSockets)
+        <input id="url" list="brokers" spellcheck="false" required>
+        <datalist id="brokers">
+          <option value="ws://localhost:9001">Local Mosquitto (docker compose)</option>
+          <option value="wss://broker.hivemq.com:8884/mqtt">HiveMQ public broker</option>
+          <option value="wss://test.mosquitto.org:8081">test.mosquitto.org</option>
+          <option value="wss://broker.emqx.io:8084/mqtt">EMQX public broker</option>
+        </datalist>
+      </label>
+      <label>Topic <input id="topic" spellcheck="false" required></label>
+      <label>Username <input id="user" spellcheck="false" placeholder="optional"></label>
+      <label>Password <input id="pass" type="password" placeholder="optional (never saved)"></label>
+      <label>Robots (1–10) <input id="robots" type="number" min="1" max="10" step="1"></label>
+      <label>Rate per robot (Hz) <input id="rate" type="number" min="1" max="10" step="1"></label>
+      <div class="buttons">
+        <button type="submit" id="start" class="primary">Start</button>
+        <button type="button" id="stop" disabled>Stop</button>
+      </div>
+    </form>
+    <p id="hint" class="hint"></p>
+  </section>
+
+  <section class="panel map" aria-label="Warehouse map">
+    <h2>Warehouse map · 40 m × 20 m</h2>
+    <canvas id="map" role="img" aria-label="Live map of the simulated robots"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--shelf)"></i>shelves</span>
+      <span><i style="background:var(--station)"></i>pick stations</span>
+      <span><i style="background:var(--dock)"></i>charging dock</span>
+      <span>Robots keep moving while stopped; <b>Start</b> only turns publishing on.</span>
+    </div>
+  </section>
+
+  <div class="side">
+    <section class="panel" aria-label="Publishing statistics">
+      <h2>Publishing</h2>
+      <div class="stats">
+        <div class="stat"><div class="v" id="sent">0</div><div class="k">messages sent</div></div>
+        <div class="stat"><div class="v" id="mps">0</div><div class="k">messages / s</div></div>
+        <div class="stat"><div class="v" id="expected">0</div><div class="k">target msg / s</div></div>
+        <div class="stat"><div class="v" id="dropped">0</div><div class="k">dropped (offline)</div></div>
+      </div>
+      <div class="err-line" id="lastErr"></div>
+    </section>
+
+    <section class="panel" aria-label="Fleet">
+      <h2>Fleet</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Robot</th><th>Status</th><th>Battery</th><th>m/s</th><th>Motor °C</th><th>Obst. m</th></tr></thead>
+          <tbody id="fleet"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel payload" aria-label="Last payload">
+    <h2>Last payload</h2>
+    <pre id="last">—</pre>
+  </section>
+</main>
+
+<footer>
+  Payload format and the full pipeline (Mosquitto → Telegraf → QuestDB → Grafana) are described in the
+  <a href="https://github.com/armelai/robot-telemetry-sim#readme">project README</a>.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js"
+        integrity="sha384-9WWboT9UtuPFRlOLq4FygQkcJxzYcpz8SXGkNyCEXM+44n14xzjNlrRKYZwuF/A6"
+        crossorigin="anonymous"></script>
+<script>
+(() => {
+  'use strict';
+
+  // ---- World ---------------------------------------------------------------
+  const W = 40, H = 20;                       // warehouse size, metres
+  const AISLES = [5, 11, 17, 23, 29, 35];     // x of each vertical aisle
+  const STATION_Y = [6, 10, 14];              // pick stations along each aisle
+  const CORRIDOR_Y = [2, 18];                 // bottom and top cross corridors
+  const DOCK_X = 1.5;                         // charging lane along the left wall
+  const MAX_ROBOTS = 10;
+
+  const VMAX = 1.2, ACCEL = 0.8, DECEL = 1.2, TURN_RATE = 2.5;
+  const FAULT_RATE = 0.003;                   // faults per second while moving
+  const OBSTACLE_RATE = 0.06;                 // obstacle events per second while moving
+  const CHARGE_RATE = 1.0;                    // % per second at the dock
+  const SUBSTEP = 0.05, MAX_CATCHUP = 5;      // seconds
+
+  const COLORS = ['#e5484d', '#30a46c', '#3e63dd', '#f76b15', '#8e4ec6',
+                  '#12a594', '#d6409f', '#ad7f58', '#0090ff', '#978365'];
+
+  // Waypoint graph: aisle nodes, corridors, and the dock lane.
+  const nodes = [], adj = [];
+  const addNode = (x, y) => { nodes.push({ x, y }); adj.push([]); return nodes.length - 1; };
+  const link = (a, b) => {
+    const d = Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y);
+    adj[a].push([b, d]); adj[b].push([a, d]);
+  };
+
+  const aisleNodes = AISLES.map(ax =>
+    [CORRIDOR_Y[0], ...STATION_Y, CORRIDOR_Y[1]].map(y => addNode(ax, y)));
+  for (const col of aisleNodes) for (let i = 0; i < col.length - 1; i++) link(col[i], col[i + 1]);
+  for (let i = 0; i < aisleNodes.length - 1; i++) {
+    link(aisleNodes[i][0], aisleNodes[i + 1][0]);
+    link(aisleNodes[i].at(-1), aisleNodes[i + 1].at(-1));
+  }
+  const laneBottom = addNode(DOCK_X, CORRIDOR_Y[0]);
+  const laneTop = addNode(DOCK_X, CORRIDOR_Y[1]);
+  const dockSlots = Array.from({ length: MAX_ROBOTS }, (_, i) => addNode(DOCK_X, 3.5 + i * 1.4));
+  [laneBottom, ...dockSlots, laneTop].reduce((a, b) => (link(a, b), b));
+  link(laneBottom, aisleNodes[0][0]);
+  link(laneTop, aisleNodes[0].at(-1));
+  const stations = aisleNodes.flatMap(col => col.slice(1, -1));
+
+  function shortestPath(from, to) {
+    const n = nodes.length, dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+    dist[from] = 0;
+    for (;;) {
+      let u = -1, best = Infinity;
+      for (let i = 0; i < n; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+      if (u < 0 || u === to) break;
+      done[u] = true;
+      for (const [v, w] of adj[u]) if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; prev[v] = u; }
+    }
+    const path = [];
+    for (let v = to; v !== from && v !== -1; v = prev[v]) path.unshift(v);
+    return path;                               // excludes `from`
+  }
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const wrap = a => { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; };
+  const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+
+  // ---- Robots --------------------------------------------------------------
+  function makeRobot(i) {
+    const dock = dockSlots[i];
+    return {
+      id: `amr-${String(i + 1).padStart(2, '0')}`, color: COLORS[i],
+      x: nodes[dock].x, y: nodes[dock].y, heading: 0, speed: 0,
+      battery: rand(55, 100), motorTemp: rand(24, 26), obstacleDist: 5, odometer: 0,
+      status: 'idle', timer: rand(0.5, 3), fault: 0, obstacle: null,
+      node: dock, path: [], mission: null, dock,
+      trail: [], trailT: 0, pubAcc: Math.random(),
+    };
+  }
+
+  function goTo(r, target, mission) {
+    r.path = shortestPath(r.node, target);
+    r.mission = mission;
+    r.status = 'moving';
+    if (!r.path.length) arrive(r);
+  }
+
+  function nextTask(r) {
+    if (r.battery < 30) return goTo(r, r.dock, 'dock');
+    let s;
+    do s = stations[Math.floor(Math.random() * stations.length)]; while (s === r.node);
+    goTo(r, s, 'pick');
+  }
+
+  function arrive(r) {
+    r.speed = 0;
+    if (r.mission === 'dock') r.status = 'charging';
+    else { r.status = 'picking'; r.timer = rand(3, 8); }
+    r.mission = null;
+  }
+
+  function onWaypoint(r) {
+    if (r.mission === 'pick' && r.battery < 20) return goTo(r, r.dock, 'dock');
+    if (!r.path.length) arrive(r);
+  }
+
+  function drive(r, h) {
+    const tgt = nodes[r.path[0]];
+    const dx = tgt.x - r.x, dy = tgt.y - r.y, d = Math.hypot(dx, dy);
+    let err = 0;
+    if (d > 1e-6) {
+      const want = Math.atan2(dy, dx);
+      r.heading = wrap(r.heading + clamp(wrap(want - r.heading), -TURN_RATE * h, TURN_RATE * h));
+      err = wrap(want - r.heading);
+    }
+    let vt = Math.abs(err) > 0.35 ? 0.15 : VMAX;          // turn almost on the spot
+    let vNext = 0;                                         // speed allowed at the waypoint
+    if (r.path.length > 1) {
+      const nn = nodes[r.path[1]];
+      const turn = Math.abs(wrap(Math.atan2(nn.y - tgt.y, nn.x - tgt.x) - Math.atan2(dy, dx)));
+      vNext = turn > 0.5 ? 0.3 : VMAX;
+    }
+    vt = Math.min(vt, Math.sqrt(vNext * vNext + 2 * DECEL * d));
+    if (r.obstacleDist < 1.5) vt *= clamp((r.obstacleDist - 0.4) / 1.1, 0, 1);
+    r.speed = r.speed < vt ? Math.min(vt, r.speed + ACCEL * h) : Math.max(vt, r.speed - DECEL * h);
+
+    const s = r.speed * h;
+    if (s >= d) { r.x = tgt.x; r.y = tgt.y; r.node = r.path.shift(); onWaypoint(r); }
+    else { r.x += dx / d * s; r.y += dy / d * s; }
+  }
+
+  function updateObstacle(r, h) {
+    if (r.obstacle) {
+      const o = r.obstacle;
+      o.t += h;
+      if (o.t < o.dur) { r.obstacleDist = 5 - (5 - o.min) * Math.sin(Math.PI * o.t / o.dur); return; }
+      r.obstacle = null;
+    } else if (r.status === 'moving' && Math.random() < OBSTACLE_RATE * h) {
+      r.obstacle = { t: 0, dur: rand(3, 6), min: rand(0.2, 1.2) };
+    }
+    r.obstacleDist = 5;
+  }
+
+  function step(r, h) {
+    if (r.status === 'moving' && Math.random() < FAULT_RATE * h) {
+      r.status = 'error'; r.fault = rand(5, 15); r.obstacle = null;
+    }
+    switch (r.status) {
+      case 'error':
+        r.speed = Math.max(0, r.speed - 2 * DECEL * h);
+        if ((r.fault -= h) <= 0) { r.status = r.path.length ? 'moving' : 'idle'; r.timer = 1; }
+        break;
+      case 'idle':
+      case 'picking':
+        if ((r.timer -= h) <= 0) nextTask(r);
+        break;
+      case 'charging':
+        r.battery = Math.min(100, r.battery + CHARGE_RATE * h);
+        if (r.battery >= 95) { r.status = 'idle'; r.timer = rand(1, 3); }
+        break;
+      case 'moving':
+        drive(r, h);
+        break;
+    }
+    if (r.status !== 'charging') {
+      const drain = 0.02 + 0.25 * r.speed + (r.status === 'picking' ? 0.05 : 0);
+      r.battery = clamp(r.battery - drain * h, 0, 100);
+    }
+    updateObstacle(r, h);
+    const target = 25 + 25 * (r.speed / VMAX) + (r.status === 'picking' ? 4 : 0);
+    r.motorTemp += (target - r.motorTemp) * h / 20;
+    r.odometer += r.speed * h;
+
+    if ((r.trailT += h) >= 0.25) {
+      r.trailT = 0;
+      r.trail.push([r.x, r.y]);
+      if (r.trail.length > 32) r.trail.shift();
+    }
+  }
+
+  // Influx Line Protocol. Timestamp in ns, built as a string because a JS Number
+  // can't hold epoch nanoseconds exactly (microseconds fit, so pad with 000).
+  function toLine(r, tMs) {
+    return `robot,robot_id=${r.id},status=${r.status} ` +
+      `x=${r.x.toFixed(2)},y=${r.y.toFixed(2)},heading=${r.heading.toFixed(3)},` +
+      `speed=${r.speed.toFixed(2)},battery=${r.battery.toFixed(1)},motor_temp=${r.motorTemp.toFixed(1)},` +
+      `obstacle_dist=${r.obstacleDist.toFixed(2)},odometer=${r.odometer.toFixed(1)} ` +
+      `${Math.round(tMs * 1000)}000`;
+  }
+
+  // ---- UI & settings -------------------------------------------------------
+  const $ = id => document.getElementById(id);
+  const ui = {
+    form: $('cfg'), url: $('url'), topic: $('topic'), user: $('user'), pass: $('pass'),
+    robots: $('robots'), rate: $('rate'), start: $('start'), stop: $('stop'), hint: $('hint'),
+    conn: $('conn'), sent: $('sent'), mps: $('mps'), expected: $('expected'), dropped: $('dropped'),
+    lastErr: $('lastErr'), fleet: $('fleet'), last: $('last'), canvas: $('map'),
+  };
+  const STORE_KEY = 'robot-telemetry-sim.settings';
+  const DEFAULTS = { url: 'ws://localhost:9001', topic: 'robots/telemetry', user: '', robots: 3, rate: 1 };
+
+  function loadSettings() {
+    try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; }
+    catch { return { ...DEFAULTS }; }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        url: ui.url.value.trim(), topic: ui.topic.value.trim(), user: ui.user.value.trim(),
+        robots: robotCount(), rate: publishRate(),
+      }));
+    } catch { /* storage unavailable: settings just aren't remembered */ }
+  }
+
+  const robotCount = () => clamp(Math.round(+ui.robots.value) || 1, 1, MAX_ROBOTS);
+  const publishRate = () => clamp(Math.round(+ui.rate.value) || 1, 1, 10);
+
+  const s0 = loadSettings();
+  ui.url.value = s0.url; ui.topic.value = s0.topic; ui.user.value = s0.user;
+  ui.robots.value = s0.robots; ui.rate.value = s0.rate;
+
+  const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+  const PUBLIC_BROKERS = ['broker.hivemq.com', 'test.mosquitto.org', 'broker.emqx.io'];
+
+  function updateHint() {
+    let msg = '', warn = false;
+    try {
+      const u = new URL(ui.url.value.trim());
+      const local = LOCAL_HOSTS.includes(u.hostname);
+      if (!/^wss?:$/.test(u.protocol)) {
+        msg = 'The broker URL must start with ws:// or wss://.'; warn = true;
+      } else if (location.protocol === 'https:' && u.protocol === 'ws:' && !local) {
+        msg = 'This page is served over HTTPS, so the browser will block an unencrypted ws:// connection to a remote host. Use a wss:// URL.'; warn = true;
+      } else if (local && location.protocol === 'https:') {
+        msg = 'Connecting to a broker on your own computer. Start the local stack first (docker compose up -d in robot-telemetry/). ' +
+              'Your browser may ask for permission to access apps on this device or your local network — allow it for this site.';
+      } else if (PUBLIC_BROKERS.includes(u.hostname)) {
+        msg = 'Public test broker: anyone can read and write this topic. Use a unique topic (e.g. add your name) and fake data only.'; warn = true;
+      }
+    } catch {
+      msg = 'Enter a valid broker URL, e.g. ws://localhost:9001.'; warn = true;
+    }
+    ui.hint.textContent = msg;
+    ui.hint.classList.toggle('warn', warn);
+  }
+
+  // ---- Fleet ---------------------------------------------------------------
+  const fleet = [];
+  function resizeFleet() {
+    const n = robotCount();
+    while (fleet.length < n) fleet.push(makeRobot(fleet.length));
+    fleet.length = n;
+  }
+
+  // ---- MQTT ----------------------------------------------------------------
+  let client = null, publishing = false, topic = '';
+  let sent = 0, dropped = 0, lastLine = '', lastError = '';
+  const sentLog = [];                          // [time, sentTotal] samples for msg/s
+
+  function setConn(state, text) {
+    ui.conn.dataset.state = state;
+    ui.conn.textContent = text || state;
+  }
+
+  function setRunning(on) {
+    for (const el of [ui.url, ui.topic, ui.user, ui.pass]) el.disabled = on;
+    ui.start.disabled = on;
+    ui.stop.disabled = !on;
+  }
+
+  function start() {
+    if (typeof mqtt === 'undefined') {
+      lastError = 'mqtt.js failed to load from cdn.jsdelivr.net — check your connection or content blocker.';
+      setConn('error');
+      return;
+    }
+    const url = ui.url.value.trim();
+    topic = ui.topic.value.trim();
+    if (!topic || /[#+]/.test(topic)) { lastError = 'Topic must be non-empty and contain no wildcards (# or +).'; return; }
+    saveSettings();
+    lastError = '';
+    try {
+      client = mqtt.connect(url, {
+        clientId: 'robot-sim-' + Math.random().toString(16).slice(2, 10),
+        username: ui.user.value.trim() || undefined,
+        password: ui.pass.value || undefined,
+        clean: true, keepalive: 30, reconnectPeriod: 3000, connectTimeout: 8000,
+        queueQoSZero: false,                    // never buffer telemetry while offline
+      });
+    } catch (e) {
+      lastError = e.message; setConn('error'); client = null; return;
+    }
+    publishing = true;
+    setRunning(true);
+    setConn('connecting');
+    const c = client;
+    c.on('connect', () => { if (client === c) setConn('connected'); });
+    c.on('reconnect', () => { if (client === c) setConn('connecting', 'reconnecting'); });
+    c.on('offline', () => { if (client === c) setConn('connecting', 'offline'); });
+    c.on('error', e => { if (client === c) { lastError = e.message || String(e); setConn('error'); } });
+  }
+
+  function stop() {
+    publishing = false;
+    if (client) { const c = client; client = null; c.end(true); }
+    setRunning(false);
+    setConn('disconnected');
+  }
+
+  function publish(r, tMs) {
+    if (!client || !client.connected) { dropped++; return; }
+    lastLine = toLine(r, tMs);
+    client.publish(topic, lastLine, { qos: 0, retain: false }, err => {
+      if (err) lastError = err.message; else sent++;
+    });
+  }
+
+  // ---- Simulation loop -----------------------------------------------------
+  let lastTick = Date.now();
+  function tick() {
+    const now = Date.now();
+    if (now - lastTick > MAX_CATCHUP * 1000) lastTick = now - MAX_CATCHUP * 1000;
+    const dt = Math.max(0, (now - lastTick) / 1000);
+    const n = Math.max(1, Math.ceil(dt / SUBSTEP)), h = dt / n;
+    const period = 1 / publishRate();
+    for (let k = 1; k <= n; k++) {
+      const t = lastTick + k * h * 1000;
+      for (const r of fleet) {
+        step(r, h);
+        if (!publishing) continue;
+        if ((r.pubAcc += h) >= period) {
+          r.pubAcc = Math.min(r.pubAcc - period, period);
+          publish(r, t);
+        }
+      }
+    }
+    lastTick = now;
+  }
+
+  // Timers in a Web Worker keep running at full rate in background tabs,
+  // where the browser would otherwise slow setInterval down.
+  function startTicker(fn, ms) {
+    try {
+      const src = 'let id;onmessage=e=>{clearInterval(id);id=setInterval(()=>postMessage(0),e.data)}';
+      const worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.onmessage = fn;
+      worker.postMessage(ms);
+    } catch {
+      setInterval(fn, ms);
+    }
+  }
+
+  // ---- Rendering -----------------------------------------------------------
+  const ctx = ui.canvas.getContext('2d');
+  let css = {};
+  function readColors() {
+    const s = getComputedStyle(document.documentElement);
+    for (const k of ['floor', 'wall', 'shelf', 'edge', 'station', 'dock', 'text', 'muted', 'err', 'panel'])
+      css[k] = s.getPropertyValue('--' + k).trim();
+  }
+  readColors();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', readColors);
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = ui.canvas.clientWidth, ch = cw * H / W;
+    if (ui.canvas.width !== Math.round(cw * dpr) || ui.canvas.height !== Math.round(ch * dpr)) {
+      ui.canvas.width = Math.round(cw * dpr);
+      ui.canvas.height = Math.round(ch * dpr);
+      ui.canvas.style.height = ch + 'px';
+    }
+    const s = cw / W;
+    const X = x => x * s, Y = y => (H - y) * s;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    ctx.fillStyle = css.floor;
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Travel lanes
+    ctx.strokeStyle = css.edge;
+    ctx.lineWidth = Math.max(1, s * 0.12);
+    ctx.setLineDash([s * 0.4, s * 0.3]);
+    ctx.beginPath();
+    adj.forEach((list, a) => list.forEach(([b]) => {
+      if (b < a) return;
+      ctx.moveTo(X(nodes[a].x), Y(nodes[a].y));
+      ctx.lineTo(X(nodes[b].x), Y(nodes[b].y));
+    }));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Shelves between aisles and one along the right wall
+    ctx.fillStyle = css.shelf;
+    const shelfXs = AISLES.map((ax, i) => [ax + 1.3, (AISLES[i + 1] ?? W + 0.3) - 1.3]);
+    for (const [x0, x1] of shelfXs) {
+      ctx.fillRect(X(x0), Y(16), (x1 - x0) * s, 12 * s);
+    }
+
+    // Pick stations
+    ctx.fillStyle = css.station;
+    const st = Math.max(4, s * 0.5);
+    for (const i of stations) ctx.fillRect(X(nodes[i].x) - st / 2, Y(nodes[i].y) - st / 2, st, st);
+
+    // Dock slots on the left wall
+    ctx.fillStyle = css.dock;
+    for (const i of dockSlots) ctx.fillRect(X(0.15), Y(nodes[i].y) - s * 0.4, s * 0.45, s * 0.8);
+
+    // Walls
+    ctx.strokeStyle = css.wall;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, cw - 2, ch - 2);
+
+    // Trails
+    ctx.lineWidth = Math.max(1.5, s * 0.12);
+    for (const r of fleet) {
+      if (r.trail.length < 2) continue;
+      ctx.strokeStyle = r.color + '66';
+      ctx.beginPath();
+      r.trail.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+      ctx.lineTo(X(r.x), Y(r.y));
+      ctx.stroke();
+    }
+
+    // Robots: arrow pointing along the heading
+    const size = Math.max(7, s * 0.75);
+    const blink = Math.floor(performance.now() / 400) % 2 === 0;
+    ctx.font = `600 ${Math.max(10, s * 0.55)}px system-ui, sans-serif`;
+    ctx.textBaseline = 'middle';
+    for (const r of fleet) {
+      const px = X(r.x), py = Y(r.y);
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(-r.heading);
+      ctx.beginPath();
+      ctx.moveTo(size, 0);
+      ctx.lineTo(-size * 0.7, size * 0.65);
+      ctx.lineTo(-size * 0.35, 0);
+      ctx.lineTo(-size * 0.7, -size * 0.65);
+      ctx.closePath();
+      ctx.fillStyle = r.color;
+      ctx.fill();
+      ctx.restore();
+      if (r.status === 'error' || r.status === 'charging') {
+        ctx.beginPath();
+        ctx.arc(px, py, size * 1.35, 0, Math.PI * 2);
+        ctx.strokeStyle = r.status === 'error' ? css.err : css.dock;
+        ctx.lineWidth = 2;
+        if (r.status !== 'error' || blink) ctx.stroke();
+      }
+      ctx.fillStyle = css.text;
+      ctx.fillText(r.id.slice(-2), px + size * 1.1, py - size * 1.1);
+    }
+    requestAnimationFrame(draw);
+  }
+
+  const fmt = (v, d) => v.toFixed(d);
+  function renderPanel() {
+    ui.fleet.innerHTML = fleet.map(r => `
+      <tr>
+        <td><span class="dot" style="background:${r.color}"></span>${r.id}</td>
+        <td><span class="status ${r.status}">${r.status}</span></td>
+        <td><span class="bar${r.battery < 20 ? ' low' : ''}"><span style="width:${r.battery.toFixed(0)}%"></span></span>${fmt(r.battery, 0)}%</td>
+        <td>${fmt(r.speed, 2)}</td>
+        <td>${fmt(r.motorTemp, 1)}</td>
+        <td>${fmt(r.obstacleDist, 1)}</td>
+      </tr>`).join('');
+
+    const now = performance.now();
+    sentLog.push([now, sent]);
+    while (sentLog.length > 2 && now - sentLog[0][0] > 2000) sentLog.shift();
+    const [t0, sent0] = sentLog[0];
+    const mps = now > t0 ? (sent - sent0) * 1000 / (now - t0) : 0;
+
+    ui.sent.textContent = sent.toLocaleString();
+    ui.mps.textContent = mps.toFixed(1);
+    ui.expected.textContent = publishing ? String(fleet.length * publishRate()) : '0';
+    ui.dropped.textContent = dropped.toLocaleString();
+    ui.lastErr.textContent = lastError ? 'Last error: ' + lastError : '';
+    ui.last.textContent = lastLine || '—';
+  }
+
+  // ---- Wire up -------------------------------------------------------------
+  ui.form.addEventListener('submit', e => { e.preventDefault(); start(); });
+  ui.stop.addEventListener('click', stop);
+  ui.url.addEventListener('input', updateHint);
+  ui.robots.addEventListener('change', () => { ui.robots.value = robotCount(); resizeFleet(); saveSettings(); });
+  ui.rate.addEventListener('change', () => { ui.rate.value = publishRate(); saveSettings(); });
+
+  updateHint();
+  resizeFleet();
+  startTicker(tick, 50);
+  setInterval(renderPanel, 250);
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
